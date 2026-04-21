@@ -1,3 +1,3 @@
-def add(a,cb:
+def add(a,b):
     return a+b;
     
