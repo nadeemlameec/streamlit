@@ -61,7 +61,7 @@ if prompt := st.chat_input("Ask a question or discuss the uploaded file..."):
         
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
-            contents=context_prompt,
+            contents=[context_prompt],
             config=types.GenerateContentConfig(
                 thinking_config=types.ThinkingConfig(include_thoughts=True),
                 system_instruction="You are a versatile assistant. If the user asks about uploaded data, act as a Marketing Analyst. Otherwise, act as an IAS Aspirant.",
