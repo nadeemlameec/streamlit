@@ -60,7 +60,7 @@ if prompt := st.chat_input("Ask a question or discuss the uploaded file..."):
         context_prompt = f"Context from uploaded file:\n{file_content[:2000]}\n\nUser Question: {prompt}" if uploaded_file else prompt
         
         response = client.models.generate_content(
-            model="gemini-3-flash-preview",
+            model="gemini-1.5-flash",
             contents=[context_prompt],
             config=types.GenerateContentConfig(
                 thinking_config=types.ThinkingConfig(include_thoughts=True),
