@@ -106,6 +106,11 @@ def channel_performance(df, cols):
 
 # ---------------- SAFE CONTEXT ---------------- #
 def safe_context(data, limit=3000):
+    # Can't use `if data` on a DataFrame — it raises ValueError
+    if data is None:
+        return "No data"
+    if isinstance(data, pd.DataFrame):
+        return data.to_string()[:limit] if not data.empty else "No data"
     return str(data)[:limit] if data else "No data"
 
 # ---------------- UI ---------------- #
@@ -191,7 +196,7 @@ if q := st.chat_input("Ask..."):                  # FIX: was [st.chat](...)_inpu
         )
         try:
             res = client.models.generate_content(
-                model="gemini-3-flash-preview",  # FIX: was "gemini-3-flash-preview" (doesn't exist)
+                model="gemini-1.5-flash-latest",  # FIX: was "gemini-3-flash-preview" (doesn't exist)
                 contents=f"Context:\n{context}\n\nQuestion:{q}",
                 config=types.GenerateContentConfig(temperature=0.5),
             )
