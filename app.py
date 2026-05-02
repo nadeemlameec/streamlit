@@ -32,7 +32,7 @@ if prompt := st.chat_input("Ask a question on Governance or Ethics..."):
 
     with st.chat_message("assistant"):
         response = client.models.generate_content(
-            model="gemini-3-flash",
+            model="gemini-3-flash-preview",
             contents=prompt,
             config=types.GenerateContentConfig(
                 thinking_config=types.ThinkingConfig(include_thoughts=True),
