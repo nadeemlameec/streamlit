@@ -3,7 +3,7 @@ import pandas as pd
 from google import genai
 from google.genai import types
 
-# Optional PDF support (safe import)
+# Optional PDF support
 try:
     from pypdf import PdfReader
 except ImportError:
@@ -16,222 +16,236 @@ st.set_page_config(page_title="Marketing Copilot AI", layout="wide")
 api_key = st.secrets.get("GEMINI_API_KEY") or st.sidebar.text_input("Enter API Key", type="password")
 
 if not api_key:
-    st.warning("Please provide an API Key to continue.")
+    st.warning("Please provide an API Key")
     st.stop()
 
 client = genai.Client(api_key=api_key)
-
-# ---------------- TITLE ---------------- #
-st.title("📊 Marketing Copilot AI")
 
 # ---------------- SESSION ---------------- #
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "df_insights" not in st.session_state:
-    st.session_state.df_insights = None
+if "df" not in st.session_state:
+    st.session_state.df = None
 
-if "channel_df" not in st.session_state:
-    st.session_state.channel_df = None
+if "detected_cols" not in st.session_state:
+    st.session_state.detected_cols = None
 
-# ---------------- UTILS ---------------- #
-def safe_context(data, limit=3000):
-    return str(data)[:limit] if data else "No data available"
-
-
-def extract_file_content(uploaded_file):
-    if uploaded_file.type == "application/pdf" and PdfReader:
-        reader = PdfReader(uploaded_file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
-        return text
-    else:
-        uploaded_file.seek(0)
-        return uploaded_file.read().decode("utf-8")
+# ---------------- COLUMN DETECTION ---------------- #
+COLUMN_PATTERNS = {
+    "revenue": ["revenue", "sales", "gmv", "income"],
+    "spend": ["spend", "cost", "investment"],
+    "customers": ["customer", "users", "buyers"],
+    "channel": ["channel", "source", "platform"],
+    "date": ["date", "month", "time"]
+}
 
 
-def detect_column(df, keywords):
-    for col in df.columns:
-        for k in keywords:
-            if k in col:
-                return col
-    return None
+def detect_columns(df):
+    detected = {}
+    for target, keywords in COLUMN_PATTERNS.items():
+        for col in df.columns:
+            col_clean = col.lower().strip()
+            if any(k in col_clean for k in keywords):
+                detected[target] = col
+                break
+    return detected
 
 
-def process_campaign_data(df):
-    df.columns = [c.strip().lower() for c in df.columns]
+# ---------------- CLEANING ---------------- #
+def clean_numeric(series):
+    return pd.to_numeric(
+        series.astype(str).str.replace(r"[^\d.-]", "", regex=True),
+        errors="coerce"
+    )
 
+
+def clean_text(series):
+    return series.astype(str).str.lower().str.strip()
+
+
+def clean_dates(series):
+    return pd.to_datetime(series, errors="coerce")
+
+
+def auto_clean_pipeline(df):
+    df.columns = [c.strip() for c in df.columns]
+    detected_cols = detect_columns(df)
+    clean_df = df.copy()
+
+    for key, col in detected_cols.items():
+        if key in ["revenue", "spend", "customers"]:
+            clean_df[col] = clean_numeric(clean_df[col])
+        elif key == "channel":
+            clean_df[col] = clean_text(clean_df[col])
+        elif key == "date":
+            clean_df[col] = clean_dates(clean_df[col])
+
+    return clean_df, detected_cols
+
+
+# ---------------- KPI ---------------- #
+def compute_kpis(df, cols):
     insights = {}
 
-    spend_col = detect_column(df, ["spend", "cost"])
-    revenue_col = detect_column(df, ["revenue", "sales"])
-    customer_col = detect_column(df, ["customer"])
+    rev = cols.get("revenue")
+    spend = cols.get("spend")
+    cust = cols.get("customers")
 
-    if spend_col:
-        insights["total_spend"] = float(df[spend_col].sum())
-    if revenue_col:
-        insights["total_revenue"] = float(df[revenue_col].sum())
+    if rev:
+        insights["total_revenue"] = df[rev].sum()
 
-    if spend_col and revenue_col and insights["total_spend"] != 0:
+    if spend:
+        insights["total_spend"] = df[spend].sum()
+
+    if rev and spend and insights["total_spend"] != 0:
         insights["roi"] = insights["total_revenue"] / insights["total_spend"]
 
-    if customer_col:
-        insights["total_customers"] = int(df[customer_col].sum())
+    if cust:
+        insights["total_customers"] = df[cust].sum()
 
     return insights
 
 
-def channel_performance(df):
-    df.columns = [c.strip().lower() for c in df.columns]
+# ---------------- CHANNEL PERF ---------------- #
+def channel_performance(df, cols):
+    ch = cols.get("channel")
+    rev = cols.get("revenue")
+    spend = cols.get("spend")
 
-    channel_col = detect_column(df, ["channel"])
-    revenue_col = detect_column(df, ["revenue", "sales"])
-    spend_col = detect_column(df, ["spend", "cost"])
-
-    if not channel_col or not revenue_col:
+    if not ch or not rev:
         return None
 
-    agg_dict = {revenue_col: "sum"}
-    if spend_col:
-        agg_dict[spend_col] = "sum"
+    agg = {rev: "sum"}
+    if spend:
+        agg[spend] = "sum"
 
-    result = df.groupby(channel_col).agg(agg_dict).reset_index()
+    result = df.groupby(ch).agg(agg).reset_index()
 
-    if spend_col:
-        result["ROI"] = result[revenue_col] / result[spend_col]
+    if spend:
+        result["ROI"] = result[rev] / result[spend]
 
-    return result.sort_values(by=revenue_col, ascending=False)
+    return result.sort_values(by=rev, ascending=False)
 
 
-# ---------------- SIDEBAR ---------------- #
-st.sidebar.header("📁 Upload Data")
-uploaded_file = st.sidebar.file_uploader("Upload CSV / PDF / TXT", type=["csv", "pdf", "txt"])
+# ---------------- SAFE CONTEXT ---------------- #
+def safe_context(data, limit=3000):
+    return str(data)[:limit] if data else "No data"
+
+
+# ---------------- UI ---------------- #
+st.title("📊 Marketing Copilot AI")
+
+st.sidebar.header("Upload Data")
+uploaded_file = st.sidebar.file_uploader("CSV / PDF / TXT", type=["csv", "pdf", "txt"])
 
 file_content = ""
-df = None
 
 if uploaded_file:
-    st.sidebar.success("File uploaded!")
+    st.sidebar.success("Uploaded")
 
     if uploaded_file.type == "text/csv":
         uploaded_file.seek(0)
-        df = pd.read_csv(uploaded_file)
+        raw_df = pd.read_csv(uploaded_file)
 
-        # Process KPIs
-        st.session_state.df_insights = process_campaign_data(df)
+        clean_df, detected_cols = auto_clean_pipeline(raw_df)
 
-        # Channel performance
-        st.session_state.channel_df = channel_performance(df)
+        st.session_state.df = clean_df
+        st.session_state.detected_cols = detected_cols
 
     else:
-        file_content = extract_file_content(uploaded_file)
+        if uploaded_file.type == "application/pdf" and PdfReader:
+            reader = PdfReader(uploaded_file)
+            for page in reader.pages:
+                file_content += page.extract_text() or ""
+        else:
+            file_content = uploaded_file.read().decode("utf-8")
 
-# ---------------- KPI DISPLAY ---------------- #
-if st.session_state.df_insights:
-    insights = st.session_state.df_insights
 
-    st.subheader("📈 Key Metrics")
-    col1, col2, col3 = st.columns(3)
+# ---------------- DEBUG ---------------- #
+if st.session_state.detected_cols:
+    st.subheader("🔍 Detected Columns")
+    st.json(st.session_state.detected_cols)
 
-    col1.metric("Total Spend", f"₹{insights.get('total_spend', 0):,.0f}")
-    col2.metric("Total Revenue", f"₹{insights.get('total_revenue', 0):,.0f}")
-    col3.metric("ROI", f"{insights.get('roi', 0):.2f}")
 
-    st.divider()
+# ---------------- KPI ---------------- #
+if st.session_state.df is not None:
+    kpis = compute_kpis(st.session_state.df, st.session_state.detected_cols)
 
-# ---------------- CHANNEL PERFORMANCE ---------------- #
-if st.session_state.channel_df is not None:
-    st.subheader("📊 Channel Performance")
+    st.subheader("📈 KPIs")
+    c1, c2, c3 = st.columns(3)
 
-    perf_df = st.session_state.channel_df
+    c1.metric("Revenue", f"₹{kpis.get('total_revenue', 0):,.0f}")
+    c2.metric("Spend", f"₹{kpis.get('total_spend', 0):,.0f}")
+    c3.metric("ROI", f"{kpis.get('roi', 0):.2f}")
 
-    st.dataframe(perf_df, use_container_width=True)
 
-    st.bar_chart(perf_df.set_index(perf_df.columns[0]))
+# ---------------- CHANNEL ---------------- #
+if st.session_state.df is not None:
+    perf = channel_performance(st.session_state.df, st.session_state.detected_cols)
 
-    st.divider()
+    if perf is not None:
+        st.subheader("📊 Channel Performance")
+        st.dataframe(perf, use_container_width=True)
+        st.bar_chart(perf.set_index(perf.columns[0]))
+
 
 # ---------------- AI INSIGHTS ---------------- #
 if st.sidebar.button("Generate AI Insights"):
-    with st.spinner("Analyzing..."):
+    context = safe_context(
+        st.session_state.df if st.session_state.df is not None else file_content
+    )
 
-        context_data = safe_context(
-            st.session_state.channel_df if st.session_state.channel_df is not None
-            else st.session_state.df_insights if st.session_state.df_insights
-            else file_content
+    prompt = f"""
+    You are a Marketing Analyst.
+
+    DATA:
+    {context}
+
+    Provide:
+    - Key insights
+    - Best channel
+    - Worst channel
+    - Budget suggestions
+    """
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-1.5-flash-latest",
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.3),
         )
+        st.write(response.text)
 
-        prompt = f"""
-        You are a senior Marketing Analyst.
+    except Exception as e:
+        st.error(str(e))
 
-        DATA:
-        {context_data}
-
-        Provide:
-        - Best performing channel
-        - Worst performing channel
-        - ROI insights
-        - Budget reallocation suggestion
-        """
-
-        try:
-            response = client.models.generate_content(
-                model="gemini-1.5-flash-latest",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.3,
-                ),
-            )
-            st.markdown("### 📊 AI Insights")
-            st.write(response.text)
-
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
 
 # ---------------- CHAT ---------------- #
 st.subheader("💬 Chat")
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
 
-if user_input := st.chat_input("Ask about your data..."):
-    st.session_state.messages.append({"role": "user", "content": user_input})
-
-    with st.chat_message("user"):
-        st.markdown(user_input)
+if q := st.chat_input("Ask..."):
+    st.session_state.messages.append({"role": "user", "content": q})
 
     with st.chat_message("assistant"):
 
-        context_data = safe_context(
-            st.session_state.channel_df if st.session_state.channel_df is not None
-            else st.session_state.df_insights if st.session_state.df_insights
-            else file_content
+        context = safe_context(
+            st.session_state.df if st.session_state.df is not None else file_content
         )
 
-        chat_prompt = f"""
-        Context:
-        {context_data}
-
-        Question:
-        {user_input}
-        """
-
         try:
-            response = client.models.generate_content(
+            res = client.models.generate_content(
                 model="gemini-1.5-flash-latest",
-                contents=chat_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction="You are a Marketing Analyst.",
-                    temperature=0.5,
-                ),
+                contents=f"Context:\n{context}\n\nQuestion:{q}",
+                config=types.GenerateContentConfig(temperature=0.5),
             )
-
-            reply = response.text
-
+            reply = res.text
         except Exception as e:
-            reply = f"⚠️ Error: {str(e)}"
+            reply = f"Error: {str(e)}"
 
         st.markdown(reply)
         st.session_state.messages.append({"role": "assistant", "content": reply})
