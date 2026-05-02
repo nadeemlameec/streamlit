@@ -191,7 +191,7 @@ if q := st.chat_input("Ask..."):                  # FIX: was [st.chat](...)_inpu
         )
         try:
             res = client.models.generate_content(
-                model="gemini-1.5-flash-latest",  # FIX: was "gemini-3-flash-preview" (doesn't exist)
+                model="gemini-3-flash-preview",  # FIX: was "gemini-3-flash-preview" (doesn't exist)
                 contents=f"Context:\n{context}\n\nQuestion:{q}",
                 config=types.GenerateContentConfig(temperature=0.5),
             )
